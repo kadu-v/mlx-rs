@@ -63,13 +63,47 @@ fn build_and_link_mlx_c() {
         config.define("CMAKE_BUILD_TYPE", "Release");
     }
 
-    config.define("MLX_BUILD_METAL", "OFF");
+    let target = env::var("TARGET").unwrap_or_default();
+
+    // Metal cannot be used on the iOS simulator (CMAKE_SYSTEM_NAME is "iOS"
+    // for both device and simulator, so mlx would otherwise try to build the
+    // Metal backend against the device SDK). Force the CPU backend there.
+    let is_ios_sim = target.contains("apple-ios")
+        && (target.ends_with("-sim") || target.starts_with("x86_64"));
+    let metal_enabled = cfg!(feature = "metal") && !is_ios_sim;
+
+    config.define("MLX_BUILD_METAL", if metal_enabled { "ON" } else { "OFF" });
     config.define("MLX_BUILD_ACCELERATE", "OFF");
 
-    #[cfg(feature = "metal")]
-    {
-        config.define("MLX_BUILD_METAL", "ON");
+    if metal_enabled {
+        // Same configuration as mlx-swift: JIT for most kernels plus a small
+        // AOT mlx.metallib for the kernels that cannot be JIT-compiled.
+        config.define("MLX_METAL_JIT", "ON");
     }
+
+    if target.contains("apple-ios") {
+        // The cmake crate does not set CMAKE_OSX_DEPLOYMENT_TARGET for iOS
+        // targets; without it the metallib min-OS floats up to the SDK version.
+        if let Ok(deployment_target) = env::var("IPHONEOS_DEPLOYMENT_TARGET") {
+            config.define("CMAKE_OSX_DEPLOYMENT_TARGET", &deployment_target);
+        }
+    }
+
+    // SwiftPM bundle name to search for default.metallib at runtime
+    // (used when mlx is linked into an app as a static library).
+    if let Ok(bundle) = env::var("MLX_SWIFTPM_BUNDLE") {
+        config.define("MLX_SWIFTPM_BUNDLE", &bundle);
+    }
+
+    // Point FetchContent at a local mlx checkout for development iteration.
+    if let Ok(mlx_source_dir) = env::var("MLX_SOURCE_DIR") {
+        config.define("FETCHCONTENT_SOURCE_DIR_MLX", &mlx_source_dir);
+    }
+
+    println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=MLX_SWIFTPM_BUNDLE");
+    println!("cargo:rerun-if-env-changed=MLX_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=MLX_METALLIB_EXPORT_PATH");
 
     #[cfg(feature = "accelerate")]
     {
@@ -87,9 +121,25 @@ fn build_and_link_mlx_c() {
     println!("cargo:rustc-link-lib=dylib=objc");
     println!("cargo:rustc-link-lib=framework=Foundation");
 
-    #[cfg(feature = "metal")]
-    {
+    if metal_enabled {
         println!("cargo:rustc-link-lib=framework=Metal");
+
+        // Export the AOT-compiled mlx.metallib so packaging steps (e.g.
+        // xcframework assembly) can pick it up from a stable location.
+        let candidates = [
+            dst.join("build/lib/mlx.metallib"),
+            dst.join("build/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib"),
+        ];
+        let metallib = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
+            panic!("mlx.metallib not found under {}", dst.display())
+        });
+        let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+        std::fs::copy(metallib, out_dir.join("mlx.metallib"))
+            .expect("failed to copy mlx.metallib to OUT_DIR");
+        if let Ok(export_path) = env::var("MLX_METALLIB_EXPORT_PATH") {
+            std::fs::copy(metallib, &export_path)
+                .expect("failed to copy mlx.metallib to MLX_METALLIB_EXPORT_PATH");
+        }
     }
 
     #[cfg(feature = "accelerate")]
@@ -100,7 +150,6 @@ fn build_and_link_mlx_c() {
     // Link against Xcode's clang runtime for ___isPlatformVersionAtLeast symbol
     // This is needed on macOS 26+ where the bundled LLVM runtime may be outdated
     // See: https://github.com/conda-forge/llvmdev-feedstock/issues/244
-    let target = env::var("TARGET").unwrap_or_default();
     if !target.contains("ios") {
         if let Some(clang_rt_path) = find_clang_rt_path() {
             println!("cargo:rustc-link-search={}", clang_rt_path);
