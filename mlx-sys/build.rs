@@ -7,7 +7,6 @@ use std::{
     process::Command,
 };
 
-#[cfg(feature = "metal")]
 use std::fs;
 
 #[path = "../xtask/src/bindgen_config.rs"]
@@ -54,7 +53,6 @@ fn find_clang_rt_path() -> Option<String> {
     None
 }
 
-#[cfg(feature = "metal")]
 fn mlx_c_key(mlx_c_root: &Path) -> String {
     if mlx_c_root.join(".git").exists() {
         let output = Command::new("git")
@@ -93,18 +91,21 @@ fn mlx_c_key(mlx_c_root: &Path) -> String {
     format!("{hash:016x}")[..12].to_owned()
 }
 
-#[cfg(feature = "metal")]
-fn metallib_dir(mlx_c_root: &Path) -> PathBuf {
+fn metallib_dir(mlx_c_root: &Path, target: &str) -> PathBuf {
     if let Some(path) = env::var_os("MLX_RS_METAL_PATH") {
         return PathBuf::from(path);
     }
 
     let home =
         env::var_os("HOME").expect("HOME must be set when MLX_RS_METAL_PATH is not provided");
+    // The key only identifies the mlx-c revision. Metal libraries are not
+    // portable across platforms, so the target keeps macOS, iOS and simulator
+    // builds of the same revision from overwriting each other.
     PathBuf::from(home)
         .join(".mlx")
         .join("lib")
         .join(mlx_c_key(mlx_c_root))
+        .join(target)
 }
 
 fn build_and_link_mlx_c() {
@@ -128,15 +129,43 @@ fn build_and_link_mlx_c() {
         config.define("CMAKE_BUILD_TYPE", "Release");
     }
 
-    config.define("MLX_BUILD_METAL", "OFF");
+    // CMAKE_SYSTEM_NAME is "iOS" for both device and simulator, so mlx would
+    // build the Metal backend against the device SDK on the simulator. The
+    // simulator has no usable Metal backend here, so fall back to the CPU one.
+    let is_ios = target.contains("apple-ios");
+    let is_ios_sim = is_ios && (target.ends_with("-sim") || target.starts_with("x86_64"));
+    let metal_enabled = cfg!(feature = "metal") && !is_ios_sim;
+
+    config.define("MLX_BUILD_METAL", if metal_enabled { "ON" } else { "OFF" });
     config.define("MLX_BUILD_ACCELERATE", "OFF");
 
-    #[cfg(feature = "metal")]
-    {
-        config.define("MLX_BUILD_METAL", "ON");
-        let metallib_dir = metallib_dir(mlx_c_root);
+    if metal_enabled {
+        let metallib_dir = metallib_dir(mlx_c_root, &target);
         fs::create_dir_all(&metallib_dir).expect("Unable to create the MLX metallib directory");
         config.define("MLX_METAL_PATH", &metallib_dir);
+
+        // Same configuration as mlx-swift: JIT for most kernels plus a small
+        // AOT mlx.metallib for the kernels that cannot be JIT-compiled.
+        config.define("MLX_METAL_JIT", "ON");
+    }
+
+    if is_ios {
+        // The cmake crate does not set CMAKE_OSX_DEPLOYMENT_TARGET for iOS
+        // targets; without it the metallib min-OS floats up to the SDK version.
+        if let Ok(deployment_target) = env::var("IPHONEOS_DEPLOYMENT_TARGET") {
+            config.define("CMAKE_OSX_DEPLOYMENT_TARGET", &deployment_target);
+        }
+    }
+
+    // SwiftPM bundle name to search for default.metallib at runtime, used when
+    // mlx is linked into an app as a static library.
+    if let Ok(bundle) = env::var("MLX_SWIFTPM_BUNDLE") {
+        config.define("MLX_SWIFTPM_BUNDLE", &bundle);
+    }
+
+    // Point FetchContent at a local mlx checkout for development iteration.
+    if let Ok(mlx_source_dir) = env::var("MLX_SOURCE_DIR") {
+        config.define("FETCHCONTENT_SOURCE_DIR_MLX", &mlx_source_dir);
     }
 
     #[cfg(feature = "accelerate")]
@@ -162,10 +191,9 @@ fn build_and_link_mlx_c() {
     println!("cargo:rustc-link-lib=dylib=objc");
     println!("cargo:rustc-link-lib=framework=Foundation");
 
-    #[cfg(feature = "metal")]
-    {
+    if metal_enabled {
         println!("cargo:rustc-link-lib=framework=Metal");
-        let metallib = metallib_dir(mlx_c_root).join("mlx.metallib");
+        let metallib = metallib_dir(mlx_c_root, &target).join("mlx.metallib");
         if !metallib.exists() {
             println!(
                 "cargo:warning=mlx.metallib was not created at {}; Metal operations may fail at runtime",
@@ -194,6 +222,9 @@ fn build_and_link_mlx_c() {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=MLX_RS_METAL_PATH");
+    println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=MLX_SWIFTPM_BUNDLE");
+    println!("cargo:rerun-if-env-changed=MLX_SOURCE_DIR");
     build_and_link_mlx_c();
 
     let mlx_c_root = PathBuf::from("src/mlx-c");

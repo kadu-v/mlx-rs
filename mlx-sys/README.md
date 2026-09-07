@@ -7,8 +7,10 @@ The crate version is independent of its native source tuple. This revision targe
 
 ## Metal library location
 
-Metal builds place `mlx.metallib` in `~/.mlx/lib/<mlx-c-key>/`, where `<mlx-c-key>` is the
-first 12 characters of the pinned mlx-c commit. Packaged source without Git metadata uses a
+Metal builds place `mlx.metallib` in `~/.mlx/lib/<mlx-c-key>/<target>/`, where `<mlx-c-key>` is
+the first 12 characters of the pinned mlx-c commit and `<target>` is the Rust target triple.
+Metal libraries are not portable across platforms, so the target keeps macOS, iOS and simulator
+builds of the same revision from overwriting each other. Packaged source without Git metadata uses a
 deterministic hash of the mlx-c headers and CMake configuration instead. The stable location
 allows binaries produced by `cargo install` to keep loading the library after Cargo removes its
 temporary build directory.
