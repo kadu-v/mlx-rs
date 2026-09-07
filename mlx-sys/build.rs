@@ -109,6 +109,7 @@ fn metallib_dir(mlx_c_root: &Path) -> PathBuf {
 
 fn build_and_link_mlx_c() {
     let mlx_c_root = Path::new("src/mlx-c");
+    let target = env::var("TARGET").unwrap_or_default();
     let mut config = Config::new(mlx_c_root);
     config.very_verbose(true);
     config.define("CMAKE_INSTALL_PREFIX", ".");
@@ -181,9 +182,13 @@ fn build_and_link_mlx_c() {
     // Link against Xcode's clang runtime for ___isPlatformVersionAtLeast symbol
     // This is needed on macOS 26+ where the bundled LLVM runtime may be outdated
     // See: https://github.com/conda-forge/llvmdev-feedstock/issues/244
-    if let Some(clang_rt_path) = find_clang_rt_path() {
-        println!("cargo:rustc-link-search={}", clang_rt_path);
-        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    // libclang_rt.osx only ships macOS slices, so linking it into an iOS target
+    // fails; iOS gets the symbol from its own SDK runtime instead.
+    if !target.contains("apple-ios") {
+        if let Some(clang_rt_path) = find_clang_rt_path() {
+            println!("cargo:rustc-link-search={}", clang_rt_path);
+            println!("cargo:rustc-link-lib=static=clang_rt.osx");
+        }
     }
 }
 
