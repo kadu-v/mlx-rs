@@ -14,9 +14,23 @@ iOS 対応は3つのリポジトリにまたがる。下流から順に:
 |---|---|---|
 | `kadu-v/mlx-rs` | `oxiglade/mlx-rs` | `mlx-sys/build.rs` の iOS 対応、submodule の向き先 |
 | `kadu-v/mlx-c` | `ml-explore/mlx-c` | `CMakeLists.txt` の FetchContent を `kadu-v/mlx` に向けるだけ（機能変更なし） |
-| `kadu-v/mlx` | `ml-explore/mlx` | Metal ツールチェーンの SDK 選択（`xcrun -sdk iphoneos` 等）と `MLX_SWIFTPM_BUNDLE` |
+| `kadu-v/mlx` | `ml-explore/mlx` | [ml-explore/mlx#3915](https://github.com/ml-explore/mlx/issues/3915) の 4 点: (1) `iphoneos` / `iphonesimulator` / `macosx` の SDK 選択、(2) 対応する deployment-target フラグ、(3) iOS の Metal 言語バージョン probe、(4) `MLX_SWIFTPM_BUNDLE`。v0.32.2 以降は upstream が新設した `METAL_LINK_FLAGS` の `-mmacosx-version-min` 決め打ちも直している |
 
 更新は必ず **`mlx` → `mlx-c` → `mlx-rs`** の順に行い、下流はタグ参照で上流を pin する。
+
+### mlx フォークの背景
+
+upstream PR [#3617](https://github.com/ml-explore/mlx/pull/3617)（v0.32.0 以降に収録）は configure レベルで
+`MLX_BUILD_METAL` を iOS でも ON にしたが、kernel の custom command は依然 `xcrun -sdk macosx` /
+`-mmacosx-version-min` 決め打ちで、iOS 向けの `mlx.metallib` は作れない。これを issue #3915 として起票済み
+（maintainer が 👍）。fork の 1 コミットがその修正で、upstream に入るまで持ち続ける。
+
+v0.30.6 ベースだった頃は #3617 自体も無かったので cherry-pick で載せていたが、v0.32.2 以降は不要。
+
+**upstream 側の既知の制約**: v0.32.2 の NAX カーネルは
+`MLX_METAL_VERSION >= 400 AND MACOS_SDK_VERSION >= 26.2 AND CMAKE_OSX_DEPLOYMENT_TARGET >= 26.2`
+でゲートされている。`MACOS_SDK_VERSION` は macOS の probe でしか設定されないため、**iOS ビルドでは
+deployment target を上げても NAX は有効化されない**（`MLX_METAL_NO_NAX` が定義される）。
 
 ## ブランチ
 
