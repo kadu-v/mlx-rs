@@ -108,6 +108,25 @@ fn metallib_dir(mlx_c_root: &Path, target: &str) -> PathBuf {
         .join(target)
 }
 
+/// Copy the AOT-compiled `mlx.metallib` to stable locations so packaging steps
+/// (xcframework assembly, for instance) can pick it up. `OUT_DIR` is where a
+/// downstream build looks when it cannot set an explicit path.
+fn export_metallib(metallib: &Path) {
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::copy(metallib, out_dir.join("mlx.metallib"))
+        .expect("failed to copy mlx.metallib to OUT_DIR");
+
+    if let Ok(export_path) = env::var("MLX_METALLIB_EXPORT_PATH") {
+        let export_path = PathBuf::from(export_path);
+        if let Some(parent) = export_path.parent() {
+            fs::create_dir_all(parent)
+                .expect("failed to create the MLX_METALLIB_EXPORT_PATH directory");
+        }
+        fs::copy(metallib, &export_path)
+            .expect("failed to copy mlx.metallib to MLX_METALLIB_EXPORT_PATH");
+    }
+}
+
 fn build_and_link_mlx_c() {
     let mlx_c_root = Path::new("src/mlx-c");
     let target = env::var("TARGET").unwrap_or_default();
@@ -199,6 +218,8 @@ fn build_and_link_mlx_c() {
                 "cargo:warning=mlx.metallib was not created at {}; Metal operations may fail at runtime",
                 metallib.display()
             );
+        } else {
+            export_metallib(&metallib);
         }
     }
 
@@ -225,6 +246,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
     println!("cargo:rerun-if-env-changed=MLX_SWIFTPM_BUNDLE");
     println!("cargo:rerun-if-env-changed=MLX_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=MLX_METALLIB_EXPORT_PATH");
     build_and_link_mlx_c();
 
     let mlx_c_root = PathBuf::from("src/mlx-c");
