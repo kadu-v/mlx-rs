@@ -1,7 +1,9 @@
 [workspace.package]
-# All but mlx-sys should follow the same version. mlx-sys should follow
-# the version of mlx-c.
-version = "0.25.3"
+# Fork versioning: see FORK.md. Releases are named as a prerelease of the next
+# upstream version, so they order after the upstream release they build on and
+# before the one they anticipate. mlx-sys keeps upstream's version; it is
+# identified by the git tag.
+version = "0.26.0-ios.1"
 edition = "2021"
 authors = [
     "Minghua Wu <michael.wu1107@gmail.com>",
@@ -32,9 +34,9 @@ resolver = "2"
 [workspace.dependencies]
 # workspace local dependencies
 mlx-sys = { version = "=0.2.0", path = "mlx-sys" }
-mlx-macros = { version = "0.25", path = "mlx-macros" }
-mlx-internal-macros = { version = "0.25", path = "mlx-internal-macros" }
-mlx-rs = { version = "0.25", path = "mlx-rs" }
+mlx-macros = { version = "=0.26.0-ios.1", path = "mlx-macros" }
+mlx-internal-macros = { version = "=0.26.0-ios.1", path = "mlx-internal-macros" }
+mlx-rs = { version = "=0.26.0-ios.1", path = "mlx-rs" }
 mlx-lm = { version = "0.0.1", path = "mlx-lm" }
 mlx-lm-utils = { version = "0.0.1", path = "mlx-lm-utils" }
 
