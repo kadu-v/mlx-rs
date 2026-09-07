@@ -2,8 +2,11 @@
 
 Rust bindings to the mlx-c API. Generated using bindgen.
 
-The crate version is independent of its native source tuple. This revision targets mlx-c
-`c74db5307cc8ce122f48d97ef951b30578674e7f`, whose CMake configuration pins MLX `v0.32.2`.
+The crate version is independent of its native source tuple. This revision targets the
+`kadu-v/mlx-c` fork at `v0.6.0-ios.1` (upstream mlx-c
+`c74db5307cc8ce122f48d97ef951b30578674e7f` plus a redirect), whose CMake configuration pins the
+`kadu-v/mlx` fork at `v0.32.2-ios.1` (upstream MLX `v0.32.2` plus iOS Metal cross-compilation
+support). See `FORK.md` for why these forks exist.
 
 ## Metal library location
 
