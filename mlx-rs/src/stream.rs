@@ -253,7 +253,10 @@ impl Stream {
     /// This does not cancel queued work or evaluate lazy arrays that have not
     /// been submitted. Use the same stream that was used to submit the work.
     pub fn synchronize(&self) -> Result<()> {
-        <() as Guarded>::try_from_op(|_| unsafe { mlx_sys::mlx_synchronize(self.c_stream) })
+        Guarded::try_from_op(|_| {
+            // SAFETY: self keeps the stream handle alive until synchronization completes.
+            unsafe { mlx_sys::mlx_synchronize(self.c_stream) }
+        })
     }
 
     /// Current default CPU stream.
