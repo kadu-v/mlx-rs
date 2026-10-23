@@ -7,6 +7,28 @@ use std::{
 use mlx_rs::{array, thread_local_default_stream, with_stream, Array, Stream};
 
 #[test]
+fn synchronize_completes_async_work_on_cpu_and_metal_streams() {
+    for device in [mlx_rs::Device::cpu(), mlx_rs::Device::gpu()] {
+        let stream = Stream::new_with_device(&device);
+        stream.synchronize().unwrap(); // An idle stream is also valid.
+        let output = with_stream(&stream, || {
+            let input = Array::from_slice(&vec![2.0_f32; 65_536], &[65_536]);
+            let output = input.multiply(array!(3.0_f32)).unwrap();
+            mlx_rs::transforms::async_eval([&output]).unwrap();
+            output
+        });
+        stream.synchronize().unwrap();
+        // Read through the C API: Array::as_slice would evaluate/synchronize
+        // again and could hide a missing synchronization above.
+        let data = unsafe { mlx_sys::mlx_array_data_float32(output.as_ptr()) };
+        assert!(!data.is_null());
+        // SAFETY: output owns 65_536 contiguous f32 values; the stream is idle.
+        let values = unsafe { std::slice::from_raw_parts(data, 65_536) };
+        assert!(values.iter().all(|&value| value == 6.0));
+    }
+}
+
+#[test]
 fn scoped_stream_is_identity_preserving_and_passes_through_results() {
     assert!(thread_local_default_stream().is_none());
     let selected = Stream::cpu();

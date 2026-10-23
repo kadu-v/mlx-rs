@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.26.0-ios.2
+
+- `Stream::synchronize() -> Result<()>` を追加。指定 stream に投入済みの CPU / GPU 処理の完了を待ち、MLX のエラーを `Exception` として返す。
+
 ## 0.26.0-ios.1
 
 `oxiglade/mlx-rs` の未リリース版 (`d1440761`) をベースにしたフォークのリリース。
