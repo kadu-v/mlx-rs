@@ -237,6 +237,18 @@ impl Stream {
         self.c_stream
     }
 
+    /// Blocks until previously submitted work on this stream has completed.
+    ///
+    /// This does not cancel queued work or evaluate lazy arrays that have not
+    /// been submitted. Use the same stream that was used to submit the work.
+    #[track_caller]
+    pub fn synchronize(&self) -> Result<()> {
+        Guarded::try_from_op(|_| {
+            // SAFETY: self keeps the stream handle alive until synchronization completes.
+            unsafe { mlx_sys::mlx_synchronize(self.c_stream) }
+        })
+    }
+
     /// Current default CPU stream.
     pub fn cpu() -> Self {
         crate::error::infallible(|| unsafe {

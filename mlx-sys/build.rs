@@ -200,7 +200,28 @@ fn configure_macos(config: &mut Config) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "metal")]
+fn export_metallib(metallib: &Path) {
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    fs::copy(metallib, out_dir.join("mlx.metallib"))
+        .expect("failed to copy mlx.metallib to OUT_DIR");
+
+    if let Some(export_path) = env::var_os("MLX_METALLIB_EXPORT_PATH") {
+        let export_path = PathBuf::from(export_path);
+        if let Some(parent) = export_path.parent() {
+            fs::create_dir_all(parent)
+                .expect("failed to create the MLX_METALLIB_EXPORT_PATH directory");
+        }
+        fs::copy(metallib, export_path)
+            .expect("failed to copy mlx.metallib to MLX_METALLIB_EXPORT_PATH");
+    }
+}
+
 fn build_and_link_mlx_c() {
+    let target = env::var("TARGET").unwrap();
+    let is_ios = target.contains("apple-ios");
+    let is_ios_sim = is_ios && (target.ends_with("-sim") || target.starts_with("x86_64"));
+    let metal_enabled = cfg!(feature = "metal") && !is_ios_sim;
     let mlx_c_root = Path::new("src/mlx-c");
     let mut config = Config::new(mlx_c_root);
     config.very_verbose(true);
@@ -227,12 +248,11 @@ fn build_and_link_mlx_c() {
         config.define("CMAKE_BUILD_TYPE", "Release");
     }
 
-    config.define("MLX_BUILD_METAL", "OFF");
+    config.define("MLX_BUILD_METAL", if metal_enabled { "ON" } else { "OFF" });
     config.define("MLX_BUILD_ACCELERATE", "OFF");
 
     #[cfg(feature = "metal")]
-    {
-        config.define("MLX_BUILD_METAL", "ON");
+    if metal_enabled {
         #[cfg(feature = "metal-jit")]
         config.define("MLX_METAL_JIT", "ON");
         configure_metallib(&mut config, mlx_c_root);
@@ -243,10 +263,22 @@ fn build_and_link_mlx_c() {
         config.define("MLX_BUILD_ACCELERATE", "ON");
     }
 
+    if is_ios {
+        if let Ok(deployment_target) = env::var("IPHONEOS_DEPLOYMENT_TARGET") {
+            config.define("CMAKE_OSX_DEPLOYMENT_TARGET", deployment_target);
+        }
+    }
+    if let Some(bundle) = env::var_os("MLX_SWIFTPM_BUNDLE") {
+        config.define("MLX_SWIFTPM_BUNDLE", bundle);
+    }
+    if let Some(source) = env::var_os("MLX_SOURCE_DIR") {
+        config.define("FETCHCONTENT_SOURCE_DIR_MLX", source);
+    }
+
     // build the mlx-c project
     let dst = config.build();
 
-    publish_native_sources(&dst, mlx_c_root);
+    publish_native_sources(&dst, mlx_c_root, metal_enabled);
 
     println!("cargo:rustc-link-search=native={}/build/lib", dst.display());
     // mlx's GGUF io depends on the vendored gguflib archive, which cmake leaves
@@ -270,7 +302,7 @@ fn build_and_link_mlx_c() {
     println!("cargo:rustc-link-lib=framework=Foundation");
 
     #[cfg(feature = "metal")]
-    {
+    if metal_enabled {
         println!("cargo:rustc-link-lib=framework=Metal");
         let directory = fs::read_to_string(dst.join("build/mlx-metal-path.txt"))
             .expect("Unable to read the configured metallib directory");
@@ -280,6 +312,8 @@ fn build_and_link_mlx_c() {
                 "cargo:warning=mlx.metallib was not created at {}; Metal operations may fail at runtime",
                 metallib.display()
             );
+        } else {
+            export_metallib(&metallib);
         }
     }
 
@@ -291,19 +325,22 @@ fn build_and_link_mlx_c() {
     // Link against Xcode's clang runtime for ___isPlatformVersionAtLeast symbol
     // This is needed on macOS 26+ where the bundled LLVM runtime may be outdated
     // See: https://github.com/conda-forge/llvmdev-feedstock/issues/244
-    if let Some(clang_rt_path) = native_link::find_clang_rt_path() {
-        println!("cargo:rustc-link-search={}", clang_rt_path);
-        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    // libclang_rt.osx only contains macOS slices. iOS uses its SDK runtime.
+    if !is_ios {
+        if let Some(clang_rt_path) = native_link::find_clang_rt_path() {
+            println!("cargo:rustc-link-search={}", clang_rt_path);
+            println!("cargo:rustc-link-lib=static=clang_rt.osx");
+        }
     }
 }
 
 /// Dependents read this metadata as `DEP_MLX_*`; the README documents the contract.
-fn publish_native_sources(dst: &Path, mlx_c_root: &Path) {
+fn publish_native_sources(dst: &Path, mlx_c_root: &Path, metal_enabled: bool) {
     let deps = dst.join("build").join("_deps");
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let include = [
         Some(deps.join("mlx-src")),
-        cfg!(feature = "metal").then(|| deps.join("metal_cpp-src")),
+        metal_enabled.then(|| deps.join("metal_cpp-src")),
         Some(manifest.join(mlx_c_root)),
     ];
     let include = env::join_paths(include.into_iter().flatten())
@@ -314,7 +351,7 @@ fn publish_native_sources(dst: &Path, mlx_c_root: &Path) {
         "cargo::metadata=compile_commands={}",
         dst.join("build/compile_commands.json").display()
     );
-    println!("cargo::metadata=metal={}", cfg!(feature = "metal"));
+    println!("cargo::metadata=metal={metal_enabled}");
     let version = fs::read_to_string(mlx_c_root.join("CMakeLists.txt"))
         .ok()
         .and_then(|cmake| {
@@ -332,6 +369,10 @@ fn publish_native_sources(dst: &Path, mlx_c_root: &Path) {
 
 fn main() {
     println!("cargo:rerun-if-env-changed=MLX_RS_METAL_PATH");
+    println!("cargo:rerun-if-env-changed=IPHONEOS_DEPLOYMENT_TARGET");
+    println!("cargo:rerun-if-env-changed=MLX_SWIFTPM_BUNDLE");
+    println!("cargo:rerun-if-env-changed=MLX_SOURCE_DIR");
+    println!("cargo:rerun-if-env-changed=MLX_METALLIB_EXPORT_PATH");
     println!("cargo:rerun-if-changed=native-libraries.txt");
     println!("cargo:rerun-if-changed=metallib.cmake");
     println!("cargo:rerun-if-changed=src/native_link.rs");

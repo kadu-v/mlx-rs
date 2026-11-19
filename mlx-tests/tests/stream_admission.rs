@@ -8,6 +8,32 @@ use std::{
 use mlx_rs::{array, thread_local_default_stream, with_device, with_stream, Array, Device, Stream};
 
 #[test]
+fn synchronize_completes_async_work_on_available_streams() {
+    #[cfg(feature = "metal")]
+    let devices = [Device::cpu(), Device::gpu()];
+    #[cfg(not(feature = "metal"))]
+    let devices = [Device::cpu()];
+
+    for device in devices {
+        let stream = Stream::new_with_device(&device);
+        stream.synchronize().unwrap();
+        let output = with_stream(&stream, || {
+            let input = Array::from_slice(&vec![2.0_f32; 65_536], &[65_536]);
+            let output = input.multiply(array!(3.0_f32)).unwrap();
+            mlx_rs::transforms::async_eval([&output]).unwrap();
+            output
+        });
+        stream.synchronize().unwrap();
+        // Array::as_slice would synchronize again and hide a missing synchronization above.
+        let data = unsafe { mlx_sys::mlx_array_data_float32(output.as_ptr()) };
+        assert!(!data.is_null());
+        // SAFETY: output owns 65_536 contiguous f32 values and the stream is idle.
+        let values = unsafe { std::slice::from_raw_parts(data, 65_536) };
+        assert!(values.iter().all(|&value| value == 6.0));
+    }
+}
+
+#[test]
 fn scoped_stream_is_identity_preserving_and_passes_through_results() {
     assert!(thread_local_default_stream().is_none());
     let selected = Stream::cpu();
